@@ -1,20 +1,72 @@
-# ButterBackup - Inkrementelle Vollbackups dank BtrFS
-
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
 [![Checked with mypy](http://www.mypy-lang.org/static/mypy_badge.svg)](http://mypy-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](http://www.gnu.org/licenses/gpl-3.0)
+
+<img src="logo.png" alt="ButterBackup-Logo" height="150px" align="right">
+
+# ButterBackup - Backups so geschmeidig wie Butter!
+
+**Inkrementelle Vollbackups dank BtrFS**
 
 ## Installation
 
     poetry build
     pipx install dist/butter-backup-<version>.whl
 
+## Benutzung
+
+[![asciicast](https://asciinema.org/a/HTFzRxEWw8ltCoP6NDNo6tITP.svg)](https://asciinema.org/a/HTFzRxEWw8ltCoP6NDNo6tITP)
+
+## Gefährdungsszenario
+
+ButterBackup wurde entworfen, um gegen eine Reihe spezieller
+Gefährdungsszenarien zu schützen. Die konkreten Bedrohungen und die
+entsprechenden Gegenmaßnahmen gibt die folgende Tabelle an. Auf die
+Übersichtstabelle folgt eine etwas ausführlichere Diskussion der Maßnahmen.
+
+| Bedrohung                                          | Gegenmaßnahme                        |
+| -------------------------------------------------- | ------------------------------------ |
+| Dateien verschlüsselnde Schadsoftware              | physikalisch getrennte Aufbewahrung  |
+| fehlerhafte Sicherungskopien durch Fehlbenutzung   | sehr einfache Benutzung              |
+| Verlust des Datenträgers                           | Vollverschlüsselung des Datenträgers |
+| Zerstörung des Datenträgers durch Spannungsspitzen | physikalisch getrennte Aufbewahrung  |
+| zu seltene Sicherungskopien                        | sehr einfache Benutzung              |
+
+Diese Bedrohungen werden dadurch reduziert, dass eine sehr einfache Benutzung
+die physikalisch getrennte Aufbewahrung des die Sicherungskopien enthaltenen
+Datenträgers ermöglicht.
+
+Eine einfach umzusetzende und verlässliche Maßnahme, um den Datenträger
+vor Zerstörung durch Spannungsspitzen zu schützen, ist, ihn vom Computer
+physikalisch getrennt aufzubewahren. Gleichzeitig schützt diese Maßnahme
+auch sehr gut vor der Zerstörung der Sicherungskopien durch Schadsoftware, da
+sich die Sicherungskopien außerhalb des Zugriffs der Schadsoftware befinden.
+
+Durch die physikalisch getrennte Aufbewahrung ergibt sich aber eine Bedrohung
+durch Bequemlichkeit. Ein Prozess, für dessen Durchführung manuelle
+Schritte nötig sind, ist fehleranfällig und läuft Gefahr, im Zweifel
+nicht ausgeführt zu werden. Das Anlegen von Sicherungskopien stellt hier
+keine Ausnahme dar.
+
+ButterBackup begegnet dieser Gefahr dadurch, dass es das Anlegen einer
+Sicherungskopie auf zwei manuelle Schritte reduziert. Es genügt, die
+Festplatte mit dem Computer zu verbinden und das Programm zu starten. Alle
+weiteren Schritte, z.B. Entschlüsselung, Kopie der Daten und Unmounten,
+werden von ButterBackup übernommen.
+
+Insgesamt ermöglicht ButterBackup, Sicherungskopien so sicher wie möglich
+aufzubewahren ohne dabei zu verkomplizieren, neue Sicherungskopien anzulegen.
+
 ## Ausführung der Tests
 
 **ACHTUNG**: Es gibt einen Konflikt mit Docker, der dazu führt, dass genau ein
 Test der Testsuite bei der ersten Ausführung fehlschlägt. Ab der zweiten
-Ausführung ist die Test-Suite aber robust und zuverlässig.
+Ausführung ist die Test-Suite aber robust und zuverlässig. Dieser erste
+Fehlschlag kann provoziert werden, in dem der entsprechende Test direkt
+ausgeführt wird, z.B. über
+
+    poetry run pytest -k test_mounted_device_fails_on_not_unmountable_device
 
 ### Schnell
 
@@ -31,10 +83,6 @@ nur, weil es Probleme mit Arch gab.
 Die Testsuite kann mittels `make` ausgeführt werden. Es ist auch eine
 Parallelisierung mittels `make -j N` möglich, wobei N die Anzahl der Prozesse
 angibt.
-
-## Ähnliche Projekte
-
-- https://digint.ch/btrbk/
 
 ## Designentscheidungen
 
@@ -56,19 +104,17 @@ Außerdem ist es vorstellbar, dass die Quelle zwar gelöscht wurde, aber im
 Backup archiviert werden soll. Dieser Anwendungsfall würde unmöglich gemacht,
 würden nicht mehr gelistete Ziele aus der Sicherungskopie entfernt.
 
-## Beispiele
-
 ## Ausstehende Aufgaben
 
 - README schreiben und übersetzen
-- Logo erstellen
 - Testsuite umstellen von Docker auf virtuelle Maschinen
 - Alias für Einzelkonfigurationen?
 - butter-backup exec / run
-  * nimmt Befehl als Zeichenkette und führt diesen im BackupRootDir aus
-  * butter-backup exec [<uuid>] <cmd>  --> open; cd; cmd; cd -; close
-  * sollte Mapping auf Umgebungsvariablen unterstützen, z.B. RepoPassCmd -> RESTIC_PASSWORD_COMMAND
+  - nimmt Befehl als Zeichenkette und führt diesen im BackupRootDir aus
+  - butter-backup exec [<uuid>] <cmd> --> open; cd; cmd; cd -; close
+  - sollte Mapping auf Umgebungsvariablen unterstützen, z.B. RepoPassCmd -> RESTIC_PASSWORD_COMMAND
 - Verbesserte Fehlermeldungen
-  * wenn unmount nicht möglich ist
-  * wenn BackupRepository nicht vorhanden ist
+  - wenn unmount nicht möglich ist
+  - wenn BackupRepository nicht vorhanden ist
 - SudoPassCmd
+- Konfiguration der gewünschten Kompression ermöglichen (zlib, zstd, none, etc.)

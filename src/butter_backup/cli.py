@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import enum
+import json
 import os
 import sys
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import Any, Callable, Optional
 
 import typer
 from loguru import logger
@@ -20,7 +22,7 @@ DEFAULT_CONFIG_NAME = "butter-backup.cfg"
 
 class ValidBackends(enum.Enum):
     restic = "restic"
-    butter_backup = "butter-backup"
+    btrfs_rsync = "btrfs-rsync"
 
 
 def get_default_config_path() -> str:
@@ -73,7 +75,9 @@ def open(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
         if cfg.device().exists():
             mount_dir = Path(mkdtemp())
             decrypted = dm.open_encrypted_device(cfg.device(), cfg.DevicePassCmd)
-            dm.mount_btrfs_device(decrypted, mount_dir=mount_dir)
+            dm.mount_btrfs_device(
+                decrypted, mount_dir=mount_dir, compression=cfg.Compression
+            )
             typer.echo(f"Speichermedium {cfg.UUID} wurde in {mount_dir} geöffnet.")
 
 
@@ -134,16 +138,22 @@ def backup(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
             continue
         backend = bb.BackupBackend.from_config(cfg)
         with dm.decrypted_device(cfg.device(), cfg.DevicePassCmd) as decrypted:
-            with dm.mounted_device(decrypted) as mount_dir:
+            with dm.mounted_device(decrypted, cfg.Compression) as mount_dir:
                 backend.do_backup(mount_dir)
 
 
 @app.command()
 def format_device(
+    backend: ValidBackends = typer.Argument(...),  # noqa: B008
     device: Path = typer.Argument(  # noqa: B008
         ..., exists=True, dir_okay=False, readable=False
     ),
-    backend: ValidBackends = typer.Argument(...),  # noqa: B008
+    config_to: Optional[Path] = typer.Option(  # noqa: B008
+        None,
+        help="Datei, in welche die generierte Konfiguration geschrieben werden"
+        " soll. Die angegebene Datei darf nicht existieren. Wenn nicht"
+        " angegeben, wird die Konfiguration auf STDOUT ausgegeben.",
+    ),
     verbose: int = VERBOSITY_OPTION,
 ):
     """
@@ -162,13 +172,23 @@ def format_device(
     `butter-backup` zusammen mit dem Passwortmanager `pass`.
     """
     setup_logging(verbose)
+    config_writer: Callable[[str], Any]
+    if config_to is None:
+        config_writer = typer.echo
+    else:
+        if config_to.exists():
+            raise ValueError(
+                "Zieldatei für ButterBackup-Konfiguration existiert schon!"
+            )
+        config_writer = config_to.write_text
     formatter = (
         dm.prepare_device_for_butterbackend
-        if backend == ValidBackends.butter_backup
+        if backend == ValidBackends.btrfs_rsync
         else dm.prepare_device_for_resticbackend
     )
     config = formatter(device)
-    typer.echo(f"[{config.json()}]")
+    json_serialisable = json.loads(config.json(exclude_none=True))
+    config_writer(json.dumps([json_serialisable], indent=4, sort_keys=True))
 
 
 @app.command()
