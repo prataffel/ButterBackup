@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import time
 from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -148,7 +147,6 @@ def get_result_content_for_restic(
 def test_do_backup(source_directories, mounted_device) -> None:
     empty_config, device = mounted_device
     for source_dir in source_directories:
-        time.sleep(1)  # prevent conflicts in snapshot names
         config = complement_configuration(empty_config, source_dir)
         backend = bb.BackupBackend.from_config(config)
         backend.do_backup(device)
@@ -164,7 +162,6 @@ def test_do_backup(source_directories, mounted_device) -> None:
 def test_do_backup_handles_exclude_list(source_directories, mounted_device) -> None:
     empty_config, device = mounted_device
     for source_dir in source_directories:
-        time.sleep(1)  # prevent conflicts in snapshot names
         config = complement_configuration(empty_config, source_dir).copy(
             update={"ExcludePatternsFile": EXCLUDE_FILE}
         )
@@ -172,6 +169,44 @@ def test_do_backup_handles_exclude_list(source_directories, mounted_device) -> N
         backend.do_backup(device)
     result_content = get_result_content(config, device)
     expected_content = get_expected_content(config, exclude_to_ignore_file=True)
+    assert result_content == expected_content
+
+
+@pytest.mark.parametrize(
+    "first_source, second_source",
+    [(FIRST_BACKUP, SECOND_BACKUP)],
+)
+def test_do_backup_removes_existing_files_in_exclude_list(
+    first_source, second_source, mounted_device
+) -> None:
+    # This test ensures that files are removed even if they are matched by the
+    # exclude patterns.
+    # Imagine that a user has existing backups. Then she creates an
+    # ExcludePatternsFile or adds a rule to it. Anyhow, imagine that now the
+    # ExcludePatternsFile contains a rule that matches files that already exist
+    # in the existing backups.
+    # A prior version of BtrFSRsyncBackend would not delete files that would
+    # match a rule in the ExcludePatternsFile. This lead to plenty of error
+    # messages when rsync then attempted to remove the folder where the
+    # not-deleted file was contained, because that folder was not empty.
+    # However, if the folder is gone in the source, it must be removed in the
+    # backup too.
+    # This test explicitly tests this scenario.
+
+    empty_config, device = mounted_device
+
+    first_config = complement_configuration(empty_config, first_source)
+    first_backend = bb.BackupBackend.from_config(first_config)
+    first_backend.do_backup(device)
+
+    second_config = complement_configuration(empty_config, second_source).copy(
+        update={"ExcludePatternsFile": EXCLUDE_FILE}
+    )
+    second_backend = bb.BackupBackend.from_config(second_config)
+    second_backend.do_backup(device)
+
+    result_content = get_result_content(second_config, device)
+    expected_content = get_expected_content(second_config, exclude_to_ignore_file=True)
     assert result_content == expected_content
 
 
