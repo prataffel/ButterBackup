@@ -1,5 +1,6 @@
 # Configuration
 ALL_FILES := $(sort $(shell find -type f -not -wholename "./.*" -not -name Makefile -not -wholename "*/__pycache__/*"))
+ALL_DOCKER_FILES := $(shell ls dockerfiles)
 SERVICE := $(notdir $(CURDIR))
 SERVICE_LC := $(shell echo $(SERVICE) | tr '[[:upper:]]' '[[:lower:]]')
 SERVICE_ID_FULL := $(shell sha256sum $(ALL_FILES) | sha256sum | cut -d' ' -f1)
@@ -9,8 +10,11 @@ SERVICE_ID_SHORT := $(shell echo $(SERVICE_ID_FULL) | head -c 6)
 DOCKER_TEST_TAG = $(SERVICE_LC)-$(SERVICE_ID_SHORT).test
 
 # Preparation of dependencies
-CACHEBASE ?= ~/.cache/$(SERVICE).make-cache/
+CACHEBASE ?= ~/.cache/$(SERVICE).make-cache
 CACHEDIR = $(CACHEBASE)/$(SERVICE_ID_FULL)
+
+# run-arch-tests, run-python3.8-tests, ...
+DOCKER_TESTS := $(addsuffix -tests, $(addprefix run-,$(ALL_DOCKER_FILES)))
 
 .SECONDARY:  # Do not remove intermediate files. We need them for caching!
 
@@ -25,38 +29,42 @@ check-linters: | $(CACHEDIR)/check-linters
 .PHONY: run-tests
 run-tests: run-docker-tests | run-undockered-tests
 .PHONY: run-docker-tests
-run-docker-tests: | $(addprefix $(CACHEDIR)/,run-arch-tests run-debian-tests run-python3.8-tests run-python3.9-tests run-python3.10-tests)
+run-docker-tests: | $(DOCKER_TESTS)
 .PHONY: run-undockered-tests
 run-undockered-tests: | $(CACHEDIR)/run-undockered-tests
 .PHONY: get-service-id
 get-service-id:
 	@echo $(SERVICE_ID_FULL)
+run-%-tests: | $(CACHEDIR)/run-%-tests
+	# This is a pseudo phony target. Unfortunately, Make does not support
+	# phony pattern rules.
+	@touch $@
 
 $(CACHEDIR):
 	mkdir -p $@
 
 
 $(CACHEDIR)/run-undockered-tests: | $(CACHEDIR)
-	poetry run pytest
+	poetry run pytest -n $$(nproc)
 	touch $@
 
 $(CACHEDIR)/run-%-tests: | $(CACHEDIR)/%-test-image
 	platform=$(subst -test-image,,$(notdir $|)) ; \
-	docker run --privileged -v "$(CURDIR)/tests/:/project/tests" -t $(DOCKER_TEST_TAG).$$platform
+	docker run --rm --privileged -v "$(CURDIR)/tests/:/project/tests" -t $(DOCKER_TEST_TAG).$$platform
 	touch $@
 
 $(CACHEDIR)/%-test-image: | $(CACHEDIR)
 	platform=$(subst -test-image,,$(notdir $@)) ; \
-	DOCKER_BUILDKIT=1 docker build . -t $(DOCKER_TEST_TAG).$$platform -f docker-images/$$platform
+	DOCKER_BUILDKIT=1 docker build . -t $(DOCKER_TEST_TAG).$$platform -f dockerfiles/$$platform
 	touch $@
 
 
 # STATIC ANALYSIS OF SOURCE CODE
-$(CACHEDIR)/check-linters: | $(CACHEDIR)/check-flake8 $(CACHEDIR)/check-mypy
+$(CACHEDIR)/check-linters: | $(CACHEDIR)/check-ruff $(CACHEDIR)/check-mypy
 	touch $@
 
-$(CACHEDIR)/check-flake8: | $(CACHEDIR)/check-format
-	poetry run flake8
+$(CACHEDIR)/check-ruff: | $(CACHEDIR)/check-format
+	poetry run ruff check .
 	touch $@
 
 $(CACHEDIR)/check-mypy: | $(CACHEDIR)
@@ -66,17 +74,17 @@ $(CACHEDIR)/check-mypy: | $(CACHEDIR)
 
 # CHECKING FORMAT AND REFORMATTING
 $(CACHEDIR)/apply-format: $(ALL_FILES) | $(CACHEDIR)
-	poetry run isort .
+	poetry run ruff check --select I --fix .
 	poetry run black .
 	touch $@
 
-$(CACHEDIR)/check-format: | $(CACHEDIR)/check-black $(CACHEDIR)/check-isort
+$(CACHEDIR)/check-format: | $(CACHEDIR)/check-black $(CACHEDIR)/check-import-ordering
 	touch $@
 
 $(CACHEDIR)/check-black: | $(CACHEDIR)
 	poetry run black --check .
 	touch $@
 
-$(CACHEDIR)/check-isort: | $(CACHEDIR)
-	poetry run isort --check .
+$(CACHEDIR)/check-import-ordering: | $(CACHEDIR)
+	poetry run ruff check --select I .
 	touch $@

@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import time
 from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Iterable, Union, overload
 
 import pytest
+import shell_interface as sh
 
 from butter_backup import backup_backends as bb
 from butter_backup import config_parser as cp
-from butter_backup import shell_interface as sh
 
 TEST_RESOURCES = Path(__file__).parent / "resources"
 EXCLUDE_FILE = TEST_RESOURCES / "exclude-file"
@@ -30,15 +29,13 @@ def list_files_recursively(path: Path) -> Iterable[Path]:
 @overload
 def complement_configuration(
     config: cp.BtrFSRsyncConfig, source_dir: Path
-) -> cp.BtrFSRsyncConfig:
-    ...
+) -> cp.BtrFSRsyncConfig: ...
 
 
 @overload
 def complement_configuration(
     config: cp.ResticConfig, source_dir: Path
-) -> cp.ResticConfig:
-    ...
+) -> cp.ResticConfig: ...
 
 
 def complement_configuration(
@@ -55,15 +52,13 @@ def complement_configuration(
 @overload
 def get_expected_content(
     config: cp.BtrFSRsyncConfig, exclude_to_ignore_file: bool
-) -> Dict[Path, bytes]:
-    ...
+) -> Dict[Path, bytes]: ...
 
 
 @overload
 def get_expected_content(
     config: cp.ResticConfig, exclude_to_ignore_file: bool
-) -> Counter[bytes]:
-    ...
+) -> Counter[bytes]: ...
 
 
 def get_expected_content(
@@ -72,9 +67,9 @@ def get_expected_content(
 ) -> Union[Counter[bytes], Dict[Path, bytes]]:
     source_dir: Path
     if isinstance(config, cp.BtrFSRsyncConfig):
-        source_dir = list(config.Folders.keys())[0]
+        source_dir = next(iter(config.Folders))
     elif isinstance(config, cp.ResticConfig):
-        source_dir = list(config.FilesAndFolders)[0]
+        source_dir = next(iter(config.FilesAndFolders))
     else:
         raise TypeError("Unsupported configuration encountered.")
     expected_content = {
@@ -88,13 +83,13 @@ def get_expected_content(
 
 
 @overload
-def get_result_content(config: cp.BtrFSRsyncConfig, mounted: Path) -> Dict[Path, bytes]:
-    ...
+def get_result_content(
+    config: cp.BtrFSRsyncConfig, mounted: Path
+) -> Dict[Path, bytes]: ...
 
 
 @overload
-def get_result_content(config: cp.ResticConfig, mounted: Path) -> Counter[bytes]:
-    ...
+def get_result_content(config: cp.ResticConfig, mounted: Path) -> Counter[bytes]: ...
 
 
 def get_result_content(
@@ -111,7 +106,7 @@ def get_result_content(
 def get_result_content_for_btrfs(
     config: cp.BtrFSRsyncConfig, mounted: Path
 ) -> Dict[Path, bytes]:
-    folder_dest_dir = list(config.Folders.values())[0]
+    folder_dest_dir = next(iter(config.Folders.values()))
     backup_repository = mounted / config.BackupRepositoryFolder
     latest_folder = sorted(backup_repository.iterdir())[-1]
     return {
@@ -124,18 +119,16 @@ def get_result_content_for_restic(
     config: cp.ResticConfig, mounted: Path
 ) -> Counter[bytes]:
     with TemporaryDirectory() as restore_dir:
-        sh.pipe_pass_cmd_to_real_cmd(
-            config.RepositoryPassCmd,
-            [
-                "restic",
-                "-r",
-                mounted / config.BackupRepositoryFolder,
-                "restore",
-                "latest",
-                "--target",
-                restore_dir,
-            ],
-        )
+        restore_cmd: sh.StrPathList = [
+            "restic",
+            "-r",
+            mounted / config.BackupRepositoryFolder,
+            "restore",
+            "latest",
+            "--target",
+            restore_dir,
+        ]
+        sh.pipe_pass_cmd_to_real_cmd(config.RepositoryPassCmd, restore_cmd)
         return Counter(
             file.read_bytes() for file in list_files_recursively(Path(restore_dir))
         )
@@ -148,7 +141,6 @@ def get_result_content_for_restic(
 def test_do_backup(source_directories, mounted_device) -> None:
     empty_config, device = mounted_device
     for source_dir in source_directories:
-        time.sleep(1)  # prevent conflicts in snapshot names
         config = complement_configuration(empty_config, source_dir)
         backend = bb.BackupBackend.from_config(config)
         backend.do_backup(device)
@@ -164,7 +156,6 @@ def test_do_backup(source_directories, mounted_device) -> None:
 def test_do_backup_handles_exclude_list(source_directories, mounted_device) -> None:
     empty_config, device = mounted_device
     for source_dir in source_directories:
-        time.sleep(1)  # prevent conflicts in snapshot names
         config = complement_configuration(empty_config, source_dir).copy(
             update={"ExcludePatternsFile": EXCLUDE_FILE}
         )
@@ -172,6 +163,44 @@ def test_do_backup_handles_exclude_list(source_directories, mounted_device) -> N
         backend.do_backup(device)
     result_content = get_result_content(config, device)
     expected_content = get_expected_content(config, exclude_to_ignore_file=True)
+    assert result_content == expected_content
+
+
+@pytest.mark.parametrize(
+    "first_source, second_source",
+    [(FIRST_BACKUP, SECOND_BACKUP)],
+)
+def test_do_backup_removes_existing_files_in_exclude_list(
+    first_source, second_source, mounted_device
+) -> None:
+    # This test ensures that files are removed even if they are matched by the
+    # exclude patterns.
+    # Imagine that a user has existing backups. Then she creates an
+    # ExcludePatternsFile or adds a rule to it. Anyhow, imagine that now the
+    # ExcludePatternsFile contains a rule that matches files that already exist
+    # in the existing backups.
+    # A prior version of BtrFSRsyncBackend would not delete files that would
+    # match a rule in the ExcludePatternsFile. This lead to plenty of error
+    # messages when rsync then attempted to remove the folder where the
+    # not-deleted file was contained, because that folder was not empty.
+    # However, if the folder is gone in the source, it must be removed in the
+    # backup too.
+    # This test explicitly tests this scenario.
+
+    empty_config, device = mounted_device
+
+    first_config = complement_configuration(empty_config, first_source)
+    first_backend = bb.BackupBackend.from_config(first_config)
+    first_backend.do_backup(device)
+
+    second_config = complement_configuration(empty_config, second_source).copy(
+        update={"ExcludePatternsFile": EXCLUDE_FILE}
+    )
+    second_backend = bb.BackupBackend.from_config(second_config)
+    second_backend.do_backup(device)
+
+    result_content = get_result_content(second_config, device)
+    expected_content = get_expected_content(second_config, exclude_to_ignore_file=True)
     assert result_content == expected_content
 
 

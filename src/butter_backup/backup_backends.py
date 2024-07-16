@@ -6,26 +6,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, overload
 
+import shell_interface as sh
 from loguru import logger
 
 from . import config_parser as cp
-from . import shell_interface as sh
 
 
 class BackupBackend(abc.ABC):
     @abc.abstractmethod
-    def do_backup(self, mount_dir: Path) -> None:
-        ...
+    def do_backup(self, mount_dir: Path) -> None: ...
 
     @overload
     @staticmethod
-    def from_config(config: cp.BtrFSRsyncConfig) -> BtrFSRsyncBackend:
-        ...
+    def from_config(config: cp.BtrFSRsyncConfig) -> BtrFSRsyncBackend: ...
 
     @overload
     @staticmethod
-    def from_config(config: cp.ResticConfig) -> ResticBackend:
-        ...
+    def from_config(config: cp.ResticConfig) -> ResticBackend: ...
 
     @staticmethod
     def from_config(
@@ -44,12 +41,10 @@ class BtrFSRsyncBackend(BackupBackend):
     def do_backup(self, mount_dir: Path) -> None:
         logger.info(f"Beginne mit BtrFS-Backup für Speichermedium {self.config.UUID}.")
         backup_repository = mount_dir / self.config.BackupRepositoryFolder
-        backup_root = backup_repository / dt.datetime.now().strftime(
-            self.config.SubvolTimestampFmt
-        )
         src_snapshot = self.get_source_snapshot(backup_repository)
-
-        self.snapshot(src=src_snapshot, dest=backup_root)
+        backup_root = self.snapshot(
+            src=src_snapshot, backup_repository=backup_repository
+        )
         for src, dest_name in self.config.Folders.items():
             dest = backup_root / dest_name
             self.rsync_folder(src, dest, self.config.ExcludePatternsFile)
@@ -62,10 +57,33 @@ class BtrFSRsyncBackend(BackupBackend):
     def get_source_snapshot(root: Path) -> Path:
         return max(root.glob("202?-*"))
 
-    @staticmethod
-    def snapshot(*, src: Path, dest: Path) -> None:
-        cmd: sh.StrPathList = ["sudo", "btrfs", "subvolume", "snapshot", src, dest]
+    def snapshot(self, *, src: Path, backup_repository: Path) -> Path:
+        timestamp = dt.datetime.now()
+        date_fmt = self.config.SubvolTimestampFmt
+        while True:
+            # In order to get rid of sleeps in the tests, snapshot name
+            # collisions must be handled gracefully. Incrementing the timestamp
+            # by a few seconds seems to be acceptable both in test and real
+            # world scenarios.
+            # There is still the possibility of race conditions, where another
+            # process would create the target folder before a snapshot can be
+            # created. This possibility is believed to be negligible, so
+            # nothing is done to prevent it.
+            backup_root = backup_repository / timestamp.strftime(date_fmt)
+            if backup_root.exists():
+                timestamp += dt.timedelta(seconds=1)
+            else:
+                break
+        cmd: sh.StrPathList = [
+            "sudo",
+            "btrfs",
+            "subvolume",
+            "snapshot",
+            src,
+            backup_root,
+        ]
         sh.run_cmd(cmd=cmd)
+        return backup_root
 
     @staticmethod
     def rsync_file(src: Path, dest: Path) -> None:
@@ -81,6 +99,7 @@ class BtrFSRsyncBackend(BackupBackend):
             "rsync",
             "-ax",
             "--delete",
+            "--delete-excluded",
             "--inplace",
         ]
         if maybe_exclude_patterns is not None:

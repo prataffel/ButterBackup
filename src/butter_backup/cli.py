@@ -7,13 +7,17 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Callable, Optional
 
+import storage_device_managers as sdm
 import typer
 from loguru import logger
 
 from . import __version__
 from . import backup_backends as bb
 from . import config_parser as cp
-from . import device_managers as dm
+from .device_managers import (
+    prepare_device_for_butterbackend,
+    prepare_device_for_resticbackend,
+)
 
 app = typer.Typer()
 DEFAULT_CONFIG_DIR = Path("~/.config/").expanduser()
@@ -54,7 +58,9 @@ VERBOSITY_OPTION = typer.Option(0, "--verbose", "-v", count=True)
 
 
 @app.command()
-def open(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
+def open(  # noqa: A001
+    config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION
+) -> None:
     """
     Öffne alle in der Konfiguration gelisteten Speichermedien
 
@@ -74,15 +80,15 @@ def open(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
     for cfg in configurations:
         if cfg.device().exists():
             mount_dir = Path(mkdtemp())
-            decrypted = dm.open_encrypted_device(cfg.device(), cfg.DevicePassCmd)
-            dm.mount_btrfs_device(
+            decrypted = sdm.open_encrypted_device(cfg.device(), cfg.DevicePassCmd)
+            sdm.mount_btrfs_device(
                 decrypted, mount_dir=mount_dir, compression=cfg.Compression
             )
             typer.echo(f"Speichermedium {cfg.UUID} wurde in {mount_dir} geöffnet.")
 
 
 @app.command()
-def close(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
+def close(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION) -> None:
     """
     Schließe alle geöffneten Speichermedien
 
@@ -92,7 +98,7 @@ def close(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
     """
     setup_logging(verbose)
     configurations = cp.parse_configuration(config.read_text())
-    mounted_devices = dm.get_mounted_devices()
+    mounted_devices = sdm.get_mounted_devices()
     for cfg in configurations:
         mapped_device = f"/dev/mapper/{cfg.UUID}"
         if cfg.device().exists() and mapped_device in mounted_devices:
@@ -103,13 +109,13 @@ def close(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
                     "Got several possible mount points. Expected exactly 1!"
                 )
             mount_dir = mount_dirs.pop()
-            dm.unmount_device(mount_dir)
-            dm.close_decrypted_device(Path(mapped_device))
+            sdm.unmount_device(mount_dir)
+            sdm.close_decrypted_device(Path(mapped_device))
             mount_dir.rmdir()
 
 
 @app.command()
-def backup(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
+def backup(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION) -> None:
     """
     Führe Sicherheitskopien durch
 
@@ -137,8 +143,8 @@ def backup(config: Path = CONFIG_OPTION, verbose: int = VERBOSITY_OPTION):
             )
             continue
         backend = bb.BackupBackend.from_config(cfg)
-        with dm.decrypted_device(cfg.device(), cfg.DevicePassCmd) as decrypted:
-            with dm.mounted_device(decrypted, cfg.Compression) as mount_dir:
+        with sdm.decrypted_device(cfg.device(), cfg.DevicePassCmd) as decrypted:
+            with sdm.mounted_device(decrypted, cfg.Compression) as mount_dir:
                 backend.do_backup(mount_dir)
 
 
@@ -155,7 +161,7 @@ def format_device(
         " angegeben, wird die Konfiguration auf STDOUT ausgegeben.",
     ),
     verbose: int = VERBOSITY_OPTION,
-):
+) -> None:
     """
     Richtet Speichermedium für butter-backup ein
 
@@ -182,9 +188,9 @@ def format_device(
             )
         config_writer = config_to.write_text
     formatter = (
-        dm.prepare_device_for_butterbackend
+        prepare_device_for_butterbackend
         if backend == ValidBackends.btrfs_rsync
-        else dm.prepare_device_for_resticbackend
+        else prepare_device_for_resticbackend
     )
     config = formatter(device)
     json_serialisable = json.loads(config.json(exclude_none=True))
@@ -192,7 +198,7 @@ def format_device(
 
 
 @app.command()
-def version():
+def version() -> None:
     """Gibt butter-backups aktuelle Version an"""
     typer.echo(__version__)
 

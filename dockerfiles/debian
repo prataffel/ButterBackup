@@ -1,0 +1,21 @@
+# Debian stable-slim as of 14 December 2023
+FROM debian@sha256:375fb84f3c64691a1b9a9ff5ff3905173dcd0c5e11bc2aebd5c3472a139fa2b4
+
+# Provide excecutables
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update && \
+    apt install -y btrfs-progs cryptsetup make python3 python3-poetry restic rsync sudo && \
+    apt autoclean
+
+# Setup production dependencies
+WORKDIR /project
+COPY pyproject.toml poetry.lock ./
+RUN poetry install
+
+# Install project
+COPY src/ src/
+RUN poetry install
+
+# Create /dev/disk/by-uuid/. It is required by the test suite but not available
+# in Docker containers by default.
+CMD mkdir -p /dev/disk/by-uuid/ && poetry run pytest --no-cov .
